@@ -1,0 +1,53 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Excel XML Processor</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 600px; margin: auto; }
+        .btn { padding: 10px 20px; background: #0078D7; color: white; border: none; cursor: pointer; text-decoration: none; }
+        .btn:hover { background: #005a9e; }
+        #status { margin-top: 20px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>Upload & Process Excel (.xlsx)</h2>
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".xlsx" required>
+        <button type="submit" class="btn">Process</button>
+    </form>
+    <div id="status"></div>
+</div>
+
+
+<script>
+    document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        document.getElementById('status').innerHTML = "<p>Processing... Please wait.</p>";
+        try {
+            const response = await fetch('/process', { method: 'POST', body: formData });
+            const result = await response.json();
+            
+        if (result.ok) {
+            document.getElementById('status').innerHTML = `
+                
+                <a  href=${result.download_url}  >
+                    ⬇ Download ${result.filename}
+                </a>
+            `;
+        }
+ else {
+                document.getElementById('status').innerHTML = `<p style="color:red;">Error: ${result.error}</p>`;
+            }
+        } catch (err) {
+            document.getElementById('status').innerHTML = `<p style="color:red;">Unexpected error: ${err}</p>`;
+        }
+    });
+    </script>
+    
+    
+</body>
