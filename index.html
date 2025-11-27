@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XML to Excel Parser (Client-side)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.4;margin:2rem;background:#f7f7fb;color:#222}
+    header{margin-bottom:1rem}
+    .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:1rem}
+    label{font-weight:600}
+    input[type=file]{margin:.5rem 0}
+    button{padding:.5rem 1rem;border:0;border-radius:6px;background:#0067b8;color:#fff;font-weight:600;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .logs{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92rem;white-space:pre-wrap;background:#f2f2f6;border-radius:6px;padding:.75rem;margin-top:1rem}
+    table{border-collapse:collapse;width:100%;margin-top:1rem;font-size:.9rem}
+    th,td{border:1px solid #ddd;padding:.5rem;text-align:left}
+    th{background:#fafafa}
+    footer{margin-top:2rem;color:#555}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Excel → Intercompany PO Parser</h1>
+    <p>All processing happens in your browser. Pick an <code>.xlsx</code> file and click Process.</p>
+  </header>
+
+  <div class="card">
+    <label for="file">Upload .xlsx</label>
+    <input id="file" type="file" accept=".xlsx" />
+    <div>
+      <button id="run">Process</button>
+      <a id="download" style="display:none;margin-left:1rem"></a>
+    </div>
+    <div id="msg" class="logs"></div>
+    <div id="preview"></div>
+  </div>
+
+  <footer>
+    <small>Built as a static demo. Uses SheetJS in the browser.</small>
+  </footer>
+
+  <script type="module">
+    import * as XLSX from "https://cdn.sheetjs.com/xlsx-latest/package/xlsx.mjs";
+
+    const OPEN_RE  = /<\s*(?:\w+:)?intercompanymessage\b/i;
+    const CLOSE_RE = /<\/\s*(?:\w+:)?intercompanymessage\s*>/i;
+
+    const log = (s) => { document.getElementById('msg').textContent += s + "\n"; };
+    const clearLog = () => { document.getElementById('msg').textContent = ''; };
+
+    const headers = [
+      "PUSB","PO_NUMBER","SOS","CUSTPROFCODE","ITRANSPROUTECODE","POCREATEDATE",
+      "POLINESEQNR","MMMPRODID","ORDERQTY","SELLINGUNIT","SUPPLY CHAIN UNIT",
+      "PRODUCT DESCRIPTION","SPECIAL HANDLING","LINE INSTRUCTION","ADDRESS",
+      "EXPORT MARKS","ORDER INSTRUCTION","EXPC SHIP TYPE CODE","EXPC SHIP DATE","SAP PO NUMBER"
+    ];
+
+    function parseDate(d){
+      if(!d) return "";
+      try {
+        const [y,m,day] = d.trim().split('-').map(Number);
+        return `${String(day).padStart(2,'0')}.${String(m).padStart(2,'0')}.${y}`;
+      } catch { return ""; }
+    }
+
+    function text(el, sel){ const e = el.querySelector(sel); return e? (e.textContent||'').trim() : ''; }
+    function texts(el, sel){ return Array.from(el.querySelectorAll(sel)).map(e => (e.textContent||'').trim()); }
+    function attr(el, name){ return el.getAttribute(name) || ''; }
+
+    function parseMessage(xmlStr){
+      const cleaned = xmlStr.replace(/\ufeff/g,'').replace(/\s*<\?xml[^>]*\?>/ig,'');
+      const doc = new DOMParser().parseFromString(cleaned, 'application/xml');
+      const po = doc.querySelector('purchaseOrder');
+      if(!po) return [];
+      const PUSB = attr(po,'PUSB');
+      const PO_NUMBER = attr(po,'orderNumber');
+      const header = po.querySelector('header');
+      const SOS = text(header,'SoS');
+      let CUSTPROFCODE = text(header,'customerProfileCode');
+      if(CUSTPROFCODE) CUSTPROFCODE = `STC ${CUSTPROFCODE}`;
+      const ITRANSPROUTECODE = text(header,'internationalTransportationRouteCode');
+      const POCREATEDATE = parseDate(text(header,'purchaseOrderCreationDate'));
+      const addrParts = texts(header,'purchaseOrderDetails > purchaseOrderDetail[type="shiptoaddress"]');
+      const ADDRESS = addrParts.reverse().join('; ');
+      const AH = text(header,'specialInstructions > specialInstruction[type="AH"]');
+      const ORDER_INSTRUCTION = AH ? `C${AH}` : 'null';
+
+      const rows = [];
+      const items = po.querySelectorAll('lineItems > lineItem');
+      items.forEach(li => {
+        let seq = attr(li,'sequenceNumber') || '';
+        if(/^\d+$/.test(seq)) seq = String(parseInt(seq,10));
+        const MMMPRODID = text(li,'productIdentifier');
+        const ORDERQTY = text(li,'orderQuantity');
+        const SELLINGUNIT = text(li,'sellingUnit');
+        const SUPPLY_CHAIN_UNIT = SELLINGUNIT;
+        const PRODUCT_DESCRIPTION = texts(li,'lineItemDetails > lineItemDetail[type="purchaseritemdescription"]').join(' ');
+        const SPECIAL_HANDLING = texts(li,'lineItemDetails > lineItemDetail[type="specialhandlingcode"]').join(' ');
+        const LINE_INSTRUCTION = '';
+        const EXPORT_MARKS = '';
+        const reqType = (li.querySelector('requestedShipmentDate')||{}).getAttribute?.('type') || '';
+        const reqDate = text(li,'requestedShipmentDate');
+        const EXPC_SHIP_TYPE_CODE = reqType || '';
+        const EXPC_SHIP_DATE = parseDate(reqDate);
+        let SAP_PO_NUMBER = text(li,'purchasingCompanyReferenceNumber');
+        SAP_PO_NUMBER = SAP_PO_NUMBER ? SAP_PO_NUMBER : 'null';
+
+        rows.push([
+          PUSB, PO_NUMBER, SOS, CUSTPROFCODE, ITRANSPROUTECODE, POCREATEDATE,
+          seq, MMMPRODID, ORDERQTY, SELLINGUNIT, SUPPLY_CHAIN_UNIT,
+          PRODUCT_DESCRIPTION, SPECIAL_HANDLING, LINE_INSTRUCTION, ADDRESS,
+          EXPORT_MARKS, ORDER_INSTRUCTION, EXPC_SHIP_TYPE_CODE, EXPC_SHIP_DATE,
+          SAP_PO_NUMBER
+        ]);
+      });
+      return rows;
+    }
+
+    function extractXmlChunks(colA){
+      const chunks = [];
+      for(let i=0;i<colA.length;){
+        const cell = colA[i] || '';
+        const hasOpen  = OPEN_RE.test(cell);
+        const hasClose = CLOSE_RE.test(cell);
+        if(hasOpen && hasClose){ chunks.push(cell); i++; continue; }
+        if(hasOpen){
+          const parts=[cell]; let j=i+1;
+          while(j<colA.length && !CLOSE_RE.test(colA[j]||'')){ parts.push(colA[j]||''); j++; }
+          if(j<colA.length){ parts.push(colA[j]||''); chunks.push(parts.join('')); i=j+1; }
+          else { i++; }
+        } else { i++; }
+      }
+      if(!chunks.length){
+        const big = colA.join('\n');
+        const pattern = /(\<\s*(?:\w+:)?intercompanymessage[\s\S]*?<\/\s*(?:\w+:)?intercompanymessage\s*\>)/ig;
+        let m; while((m = pattern.exec(big))){ chunks.push(m[1]); }
+      }
+      return chunks;
+    }
+
+    function renderPreview(rows){
+      const cont = document.getElementById('preview');
+      const table = document.createElement('table');
+      const thead = document.createElement('thead'); const trh = document.createElement('tr');
+      headers.forEach(h=>{ const th=document.createElement('th'); th.textContent=h; trh.appendChild(th); });
+      thead.appendChild(trh);
+      const tbody = document.createElement('tbody');
+      rows.slice(0,20).forEach(r=>{ const tr=document.createElement('tr'); r.forEach(v=>{ const td=document.createElement('td'); td.textContent=v; tr.appendChild(td); }); tbody.appendChild(tr); });
+      table.appendChild(thead); table.appendChild(tbody); cont.innerHTML=''; cont.appendChild(table);
+    }
+
+    async function processFile(file){
+      clearLog();
+      if(!file || !file.name.toLowerCase().endsWith('.xlsx')){ log('Pick an .xlsx file.'); return; }
+      if(file.size > 64 * 1024 * 1024){ log('File too large (>64MB).'); return; }
+      log(`Reading ${file.name} (${Math.round(file.size/1024)} KB)`);
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { cellDates:false, cellText:true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      const colA = [];
+      for(let r=range.s.r; r<=range.e.r; r++){
+        const cell = ws[XLSX.utils.encode_cell({c:0,r})];
+        colA.push(cell ? String(cell.v) : '');
+      }
+      const xmls = extractXmlChunks(colA);
+      log(`Found ${xmls.length} intercompanyMessage block(s).`);
+      const rows = [];
+      xmls.forEach(x => { rows.push(...parseMessage(x)); });
+      renderPreview(rows);
+      const aoa = [headers, ...rows];
+      const wsOut = XLSX.utils.aoa_to_sheet(aoa);
+      const wbOut = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbOut, wsOut, 'Sheet1');
+
+      // --- FIX STARTS HERE ---
+      // Instead of writing directly to 'blob' (which often fails in browser implementations),
+      // we write to a binary array ('array') and create the Blob manually.
+      const wbData = XLSX.write(wbOut, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbData], {type: "application/octet-stream"});
+      // --- FIX ENDS HERE ---
+
+      const url = URL.createObjectURL(blob);
+      const a = document.getElementById('download');
+      a.href = url; 
+      a.download = `processed_${file.name}`; 
+      a.textContent = 'Download result'; 
+      a.style.display = 'inline-block';
+    }
+
+    document.getElementById('run').addEventListener('click', () => {
+      const f = document.getElementById('file').files[0];
+      processFile(f);
+    });
+  </script>
+</body>
+</html>
